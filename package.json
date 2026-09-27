@@ -1,0 +1,59 @@
+{
+  "name": "agentmesh",
+  "version": "0.51.0",
+  "description": "TypeScript SDK for the AgentMesh agent-to-agent communication protocol",
+  "license": "Apache-2.0",
+  "homepage": "https://agentmesh.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AgentMesh-Community/agentmesh-typescript.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AgentMesh-Community/agentmesh-typescript/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "lint": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "nats.ws": "^1.29.2",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "agent",
+    "a2a",
+    "agent-mesh",
+    "nats",
+    "multi-agent",
+    "agent-to-agent"
+  ]
+}
