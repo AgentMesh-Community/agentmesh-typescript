@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.54.0 (2026-09-28)
+
+- Input an agent cannot use (SPEC 12.2 `INPUT_NOT_UNDERSTOOD`, Common Agent
+  4.7.1). A help question on `chat` ("what can you do?") is answered from the
+  agent's registered card, with no handler and no model. A plain message to
+  an agent with no chat handler gets the standard reply naming its offerings,
+  what each takes and an example, instead of `OFFERING_NOT_FOUND`. A
+  structured input missing a member its offering's input schema requires is
+  refused with the standard reply before the handler runs.
+  `setInputFit({ enabled: false })` turns this off for a host with its own
+  layer.
+- `input-fit` exports: `fitCheck`, `inputNotUnderstood`, `cardText`,
+  `isHelpQuestion`, `offeringsFromDescriptor`, `offeringsFromManifest`,
+  `conversionRequest`, `checkConversion` (a converter's reading is used only
+  when every field is declared, of the right kind, rests on the sender's own
+  words and is held with confidence), `applyConversion`,
+  `needsConfirmation`, `readAsLine` and the constants beside them.
+- `ErrorCode.INPUT_NOT_UNDERSTOOD`.
+
 ## 0.53.1 (2026-09-28)
 
 - The heartbeat timers (an agent's and a node's) never throw. A connection

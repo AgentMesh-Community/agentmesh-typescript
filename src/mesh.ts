@@ -116,6 +116,7 @@ import {
   DEFAULT_MAX_INBOUND_CHARS,
 } from "./constants.js";
 import { fenceInboundInput, inboundTextLength } from "./internal/fence.js";
+import { cardText, fitCheck, inputNotUnderstood, isHelpQuestion, offeringsFromManifest } from "./input-fit.js";
 import {
   Room,
   RoomsServiceSubjects,
@@ -448,6 +449,10 @@ export class AgentMesh {
    *  Default ON: the absence of a warning label is invisible, so opting out has
    *  to be the thing you say out loud (ConnectOptions.fenceInbound). */
   private fenceInbound = true;
+  /** Whether the SDK answers help questions from the card and input that does
+   *  not fit with the standard reply (input-fit.ts). Default ON; an embedder
+   *  with its own layer (mesh-adapter) turns it off with setInputFit. */
+  private inputFitEnabled = true;
   /** Cap on inbound sender text, in characters. 0 disables. */
   private maxInboundChars = DEFAULT_MAX_INBOUND_CHARS;
   // ── vouch renewal (§4.4) ─────────────────────────────────────────────
@@ -686,6 +691,78 @@ export class AgentMesh {
         Math.floor(opts.mailboxDrainIntervalMs),
       );
     }
+  }
+
+  /** Turn the input-fit layer on or off (default on). An embedder that runs
+   *  its own copy of the layer, with admission in front of it, turns this one
+   *  off so a message is judged once. */
+  setInputFit(opts: { enabled: boolean }): void {
+    this.inputFitEnabled = opts.enabled !== false;
+  }
+
+  /**
+   * Input this agent cannot use, answered before any handler runs. Returns
+   * true when it answered. Three cases, all read off this agent's own
+   * registered manifest:
+   *
+   *  - a help question on `chat` is answered from the card, with no model;
+   *  - `chat` with no chat handler gets the standard reply naming the
+   *    offerings and what each takes (it was OFFERING_NOT_FOUND, which told a
+   *    person nothing they could act on);
+   *  - a structured input to a declared offering whose input schema lists a
+   *    required member the input lacks gets the standard reply naming it.
+   *
+   * Everything else goes to the handler as before.
+   */
+  private answerInputFit(msg: Msg, env: Envelope, reqPayload: RequestPayload, viaReply: boolean, dispatchTaskId: string): boolean {
+    const offerings = offeringsFromManifest(this.manifest);
+    if (!offerings.length) return false;
+    const raw = reqPayload.input as unknown;
+    const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+    const text = typeof raw === "string" ? raw : typeof obj?.text === "string" ? obj.text : typeof obj?.prompt === "string" ? obj.prompt : "";
+    const name = String(this.manifest?.name ?? "This agent");
+    const reply = (payload: RespondPayload, error?: { code: string; message: string; retryable: boolean; details?: Record<string, unknown> }) => {
+      const e = this.newEnvelope({
+        type: "respond",
+        from: this.agentId,
+        to: env.from,
+        in_reply_to: env.id,
+        task_id: env.task_id,
+        trace: childSpan(env.trace),
+        payload,
+        ...(error ? { error } : {}),
+      });
+      if (error) this.releaseHold(dispatchTaskId, FundsReleaseReason.REJECTED);
+      this.sendRespond(msg, env, encode(e), { transportReply: viaReply, tap: true });
+      return true;
+    };
+    const offering = reqPayload.offering;
+    const declared = offerings.filter((o) => o.id !== "chat");
+    if (offering === "chat" && isHelpQuestion(text)) {
+      const card = cardText({ name, does: String(this.manifest?.description ?? ""), offerings: declared.length ? declared : offerings });
+      return reply({ status: "completed", output: { text: card, grade: "declared" } });
+    }
+    const handler = this.router.resolve(offering);
+    if (!handler && offering === "chat" && declared.length) {
+      const fit = fitCheck({ offerings: declared, text });
+      const r = inputNotUnderstood({
+        agent: name, offerings: declared, offering: fit.offering,
+        reason: fit.reason ?? "missing_input", missing: fit.missing,
+      });
+      return reply({ status: "failed", output: { text: r.text } }, r.error);
+    }
+    if (handler && offering !== "chat" && obj) {
+      const o = offerings.find((x) => x.id === offering);
+      const required = (o?.inputs ?? []).filter((i) => i.required);
+      if (o && required.length) {
+        const missing = required.filter((i) => obj[i.name] === undefined || obj[i.name] === null || obj[i.name] === "").map((i) => i.name);
+        if (missing.length) {
+          const r = inputNotUnderstood({ agent: name, offerings, offering: o, reason: "missing_input", missing });
+          return reply({ status: "failed", output: { text: r.text } }, r.error);
+        }
+      }
+    }
+    return false;
   }
 
   /** Build an envelope and sign it with this agent's key (§4.5, always-sign).
@@ -5098,6 +5175,13 @@ export class AgentMesh {
     const input = this.fenceInbound
       ? fenceInboundInput(reqPayload.input, { from: env.from, trace: env.trace })
       : reqPayload.input;
+
+    // Input this agent cannot use (§12.2 INPUT_NOT_UNDERSTOOD, Common Agent
+    // §4.7.1): a help question on the chat offering is answered from the card,
+    // and a message that does not carry what the offering declares gets the
+    // standard reply, before any handler runs. Read off the raw input: the
+    // fence rewrites text, and the phrases are matched on what was sent.
+    if (this.inputFitEnabled && this.answerInputFit(msg, env, reqPayload, viaReply, dispatchTaskId)) return;
 
     const isStreamRequest = reqPayload.config?.stream === true;
 

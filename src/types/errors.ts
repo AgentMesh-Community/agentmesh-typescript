@@ -30,6 +30,12 @@ export enum ErrorCode {
   AGENT_OVERLOADED = "AGENT_OVERLOADED",
   OFFERING_NOT_FOUND = "OFFERING_NOT_FOUND",
   INPUT_INVALID = "INPUT_INVALID",
+  /** The message did not carry the input the offering declares, or did not
+   *  say which offering it was for (§12.2, Common Agent §4.7.1). The standard
+   *  reply: `message` is a sentence a person can act on, and `details` names
+   *  the reason, the offering, what is missing, what it expects and an
+   *  example that fits (input-fit.ts inputNotUnderstood). */
+  INPUT_NOT_UNDERSTOOD = "INPUT_NOT_UNDERSTOOD",
   CONTENT_TYPE_NOT_SUPPORTED = "CONTENT_TYPE_NOT_SUPPORTED",
   UNAUTHORIZED = "UNAUTHORIZED",
   /** The recipient declares `sealing: "required"` (§8.9) and the request

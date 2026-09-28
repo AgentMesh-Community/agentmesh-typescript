@@ -345,6 +345,49 @@ export {
   inputProblemsOf,
 } from "./problems.js";
 export type { InputProblem, InputProblemCode } from "./problems.js";
+// Input an agent cannot use (§12.2 INPUT_NOT_UNDERSTOOD, Common Agent §4.7.1):
+// the fit check, the standard reply, the card answer and the converter checks.
+export {
+  INPUT_NOT_UNDERSTOOD,
+  CONVERT_OFFERING,
+  ADAPT_OFFERING,
+  DEFAULT_CONVERTER,
+  CONVERTER_TIMEOUT_MS,
+  MIN_CONFIDENCE,
+  LONG_JOB_SECONDS,
+  CONFIRM_WINDOW_MS,
+  offeringsFromDescriptor,
+  offeringsFromManifest,
+  declaresStructuredInputs,
+  isHelpQuestion,
+  isRunnerLine,
+  isYes,
+  isNo,
+  statedFields,
+  inputPresent,
+  pickOffering,
+  missingFor,
+  fitCheck,
+  kindWords,
+  exampleFor,
+  inputNotUnderstood,
+  cardText,
+  conversionRequest,
+  checkConversion,
+  applyConversion,
+  needsConfirmation,
+  readAsLine,
+} from "./input-fit.js";
+export type {
+  DeclaredInput,
+  DeclaredOffering,
+  FileRef,
+  FitResult,
+  MissReason,
+  StandardReply,
+  ConvertedField,
+  CheckedConversion,
+} from "./input-fit.js";
 
 // What a statement rested on (§5.6). The verdict is the reason this exists:
 // a good signature over a statement whose inputs have moved is not the same
