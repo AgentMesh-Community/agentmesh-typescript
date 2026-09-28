@@ -23,7 +23,7 @@
  * are held to as well.
  */
 
-import { nkeys } from "nats.ws";
+import { nkeys } from "./internal/nkeys.js";
 import { canonicalJSON } from "./internal/identity.js";
 import { MeshError, ErrorCode } from "./types/errors.js";
 

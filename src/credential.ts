@@ -26,7 +26,7 @@
  * host was powered off can still renew when it comes back, because the door it
  * knocks on is not the mesh.
  */
-import { nkeys } from "nats.ws";
+import { nkeys } from "./internal/nkeys.js";
 import {
   MAX_VOUCH_CHECK_INTERVAL_MS,
   VOUCH_RENEWAL_FRACTION,
@@ -143,6 +143,33 @@ export interface RenewedCredential {
   agents: string[];
   /** ISO-8601, or `null` if this instance still mints without an expiry. */
   expires_at: string | null;
+  /** Agents the mesh left off this credential because they are stopped by
+   *  the kill switch (`agent_paused` or `agent_terminated`). Absent when none
+   *  is. */
+  stopped?: Array<{ id: string; code: string }>;
+}
+
+/**
+ * The mesh refused a credential. `code` is the machine reason when the mesh
+ * gave one: `agent_paused` and `agent_terminated` (the kill switch) mean every
+ * agent on the roster is stopped, and a host should say so and check back
+ * later rather than retry in a loop; `agent_unnamed` is the naming rule.
+ */
+export class CredentialRefusedError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+    readonly stopped: Array<{ id: string; code: string }> = [],
+    readonly retryAfterSeconds: number | null = null,
+  ) {
+    super(message);
+    this.name = "CredentialRefusedError";
+  }
+  /** True when the refusal is the kill switch's: every agent is stopped. */
+  get isStopped(): boolean {
+    return this.code === "agent_paused" || this.code === "agent_terminated";
+  }
 }
 
 const toBytes = (s: string | Uint8Array): Uint8Array =>
@@ -242,15 +269,26 @@ export async function renewNodeCredential(
     }
     throw err;
   }
-  const data = (await res.json().catch(() => ({}))) as Partial<RenewedCredential> & { error?: string };
+  const data = (await res.json().catch(() => ({}))) as Partial<RenewedCredential> & {
+    error?: string;
+    code?: string;
+    retry_after_seconds?: number;
+  };
   if (!res.ok || !data.jwt) {
-    throw new Error(data.error ?? `credential renewal failed: HTTP ${res.status}`);
+    throw new CredentialRefusedError(
+      data.error ?? `credential renewal failed: HTTP ${res.status}`,
+      res.status,
+      typeof data.code === "string" ? data.code : null,
+      Array.isArray(data.stopped) ? data.stopped : [],
+      typeof data.retry_after_seconds === "number" ? data.retry_after_seconds : null,
+    );
   }
   return {
     jwt: data.jwt,
     node_id: data.node_id ?? body.node_id,
     agents: data.agents ?? body.agents.map((a) => a.id),
     expires_at: data.expires_at ?? null,
+    ...(Array.isArray(data.stopped) && data.stopped.length ? { stopped: data.stopped } : {}),
   };
 }
 

@@ -24,12 +24,16 @@
 
 export type RevocationAnswer =
   | { revoked: true; revokedAt?: string; replacedBy?: string }
-  | { revoked: false }
+  | { revoked: false; paused?: boolean; since?: string }
   | { unknown: true };
 
 export interface RevokedSender {
   revokedAt?: string;
   replacedBy?: string;
+  /** The kill switch: the sender is PAUSED, not revoked. A pause is lifted,
+   *  so it is remembered for OK_MS only, never for the life of the process. */
+  paused?: boolean;
+  since?: string;
 }
 
 export class RevokedSenders {
@@ -40,6 +44,7 @@ export class RevokedSenders {
 
   private revoked = new Map<string, RevokedSender>();
   private notRevoked = new Map<string, number>();
+  private paused = new Map<string, { since?: string; until: number }>();
   private inFlight = new Map<string, Promise<RevokedSender | null>>();
 
   constructor(
@@ -51,6 +56,8 @@ export class RevokedSenders {
   async check(key: string): Promise<RevokedSender | null> {
     const known = this.revoked.get(key);
     if (known) return known;
+    const pause = this.paused.get(key);
+    if (pause && pause.until > this.now()) return { paused: true, ...(pause.since ? { since: pause.since } : {}) };
     const until = this.notRevoked.get(key);
     if (until !== undefined && until > this.now()) return null;
     const pending = this.inFlight.get(key);
@@ -85,6 +92,13 @@ export class RevokedSenders {
       this.remember(key, r);
       return r;
     }
+    if ("revoked" in answer && !answer.revoked && answer.paused) {
+      if (this.paused.size > RevokedSenders.MAX) this.paused.clear();
+      this.paused.set(key, { since: answer.since, until: this.now() + RevokedSenders.OK_MS });
+      this.notRevoked.delete(key);
+      return { paused: true, ...(answer.since ? { since: answer.since } : {}) };
+    }
+    this.paused.delete(key);
     if (this.notRevoked.size > RevokedSenders.MAX) this.notRevoked.clear();
     const ttl = "unknown" in answer ? RevokedSenders.FAILED_MS : RevokedSenders.OK_MS;
     this.notRevoked.set(key, this.now() + ttl);

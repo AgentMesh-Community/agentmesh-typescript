@@ -10,7 +10,7 @@
  * §4.1 pairing ceremony locally, because this process holds the agent key.
  */
 
-import { nkeys } from "nats.ws";
+import { nkeys } from "./internal/nkeys.js";
 
 const DEFAULT_REGISTRAR = "https://naming.agentmesh.ai";
 

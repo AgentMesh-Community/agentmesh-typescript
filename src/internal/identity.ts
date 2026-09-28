@@ -12,7 +12,7 @@
  *
  * Keys are NATS nkeys (Ed25519): an agent's public nkey is its agent ID.
  */
-import { nkeys } from "nats.ws";
+import { nkeys } from "./nkeys.js";
 import { DEFAULT_VOUCH_TTL_MS } from "../constants.js";
 import type { Envelope } from "../types/envelope.js";
 import type { AgentAttestation, TrustAttestation } from "../types/manifest.js";

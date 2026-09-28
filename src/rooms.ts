@@ -560,6 +560,18 @@ export interface RoomHost {
    *  broker. The room still carries traffic, which is why this was easy to miss —
    *  it surfaced as an unrelated request failing with an empty INTERNAL_ERROR. */
   openAclTransport?(jwt: string, seed: string, inboxPrefix?: string): Promise<AclTransport>;
+  /** Meta the host stamps on everything it signs right now (SPEC §4.11
+   *  `meta.via`: the place the agent is acting from). Absent means none. */
+  outgoingMeta?(): Record<string, unknown> | undefined;
+}
+
+/** A host's stamped meta under the caller's own: the caller's keys win. */
+function withOutgoingMeta(
+  stamped: Record<string, unknown> | undefined,
+  own: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!stamped) return own;
+  return { ...stamped, ...(own ?? {}) };
 }
 
 // ── descriptor signing ──────────────────────────────────────────────────────
@@ -1735,7 +1747,7 @@ export class Room {
         from: this.host.agentId,
         context_id: this.descriptor.room_id,
         payload: msg,
-        meta,
+        meta: withOutgoingMeta(this.host.outgoingMeta?.(), meta),
       }),
       this.host.keyPair,
     );

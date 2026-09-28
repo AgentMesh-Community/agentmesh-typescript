@@ -30,6 +30,7 @@ import {
   buildCredentialRequest,
   renewNodeCredential,
   CredentialRenewer,
+  CredentialRefusedError,
   CREDENTIAL_REQUEST_TIMEOUT_MS,
 } from "../../src/credential.js";
 import { MAX_VOUCH_CHECK_INTERVAL_MS, VOUCH_RENEWAL_FRACTION } from "../../src/constants.js";
@@ -187,6 +188,24 @@ describe("renewNodeCredential", () => {
     await expect(
       renewNodeCredential("https://api.example.test", node.seed, [{ id: agent.pub, seed: agent.seed }], fetchImpl),
     ).rejects.toThrow(/retired or revoked/);
+  });
+
+  it("carries the kill switch's code, so a host waits instead of retrying", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ error: "Agent UABC... is paused by its owner", code: "agent_paused", retry_after_seconds: 300, stopped: [{ id: agent.pub, code: "agent_paused" }] }), { status: 403 })) as unknown as typeof fetch;
+    const err = await renewNodeCredential("https://api.example.test", node.seed, [{ id: agent.pub, seed: agent.seed }], fetchImpl).catch((e) => e);
+    expect(err).toBeInstanceOf(CredentialRefusedError);
+    expect(err.code).toBe("agent_paused");
+    expect(err.isStopped).toBe(true);
+    expect(err.retryAfterSeconds).toBe(300);
+    expect(err.stopped).toEqual([{ id: agent.pub, code: "agent_paused" }]);
+  });
+
+  it("names the agents the mesh left off because they are stopped", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ jwt: "x.y.z", node_id: node.pub, agents: [], expires_at: null, stopped: [{ id: agent.pub, code: "agent_paused" }] }), { status: 200 })) as unknown as typeof fetch;
+    const r = await renewNodeCredential("https://api.example.test", node.seed, [{ id: agent.pub, seed: agent.seed }], fetchImpl);
+    expect(r.stopped).toEqual([{ id: agent.pub, code: "agent_paused" }]);
   });
 });
 

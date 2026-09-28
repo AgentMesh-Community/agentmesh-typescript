@@ -1,4 +1,5 @@
-import { nkeys, jwtAuthenticator, connect as natsConnect, AckPolicy, DeliverPolicy, type ConsumerInfo, type Msg, type Subscription } from "nats.ws";
+import { nkeys } from "./internal/nkeys.js";
+import { jwtAuthenticator, connect as natsConnect, AckPolicy, DeliverPolicy, type ConsumerInfo, type Msg, type Subscription } from "nats.ws";
 import type { Envelope, Artifact, Budget, ErrorObject } from "./types/envelope.js";
 import type { Manifest, Availability, NodeDeclaredProfile, ListingDeclarations } from "./types/manifest.js";
 import type { Task, TaskState, CancelReason } from "./types/task.js";
@@ -247,12 +248,42 @@ export interface DurableEventSubscription {
   stop(): Promise<void>;
 }
 
+/** What the durable path of subscribeFeed() returns (§18.6 Feed Consumer).
+ *  `stop()` ends this subscription's handler and, when it was the last one,
+ *  this client's consume loop. It NEVER deletes the consumer or drops the
+ *  feed from its filters: the consumer is the server-side cursor, and the
+ *  next start of this agent picks up what arrived while it was away. */
+export interface DurableFeedSubscription {
+  /** The agent's one feed consumer on MESH_FEED, `mesh_feed_{agent_id}`. */
+  durable: string;
+  /** The feed subject (or `mesh.feed.{agent}.*` pattern) this subscription follows. */
+  subject: string;
+  stop(): Promise<void>;
+}
+
 /** The slice of a JetStream delivery the durable event loop reads. Structural
  *  on purpose: the fakes in the test suite implement exactly this. */
 interface JsLikeMsg {
   data: Uint8Array;
   subject?: string;
   ack(): void;
+  /** Hand the delivery back for redelivery after `millis` (feed consumer). */
+  nak?(millis?: number): void;
+}
+
+/** A delivery on the durable feed consumer whose feed no handler in this
+ *  process follows (yet) is handed back after this long, so a process that
+ *  subscribes its feeds one after another does not lose a delivery for one it
+ *  has not reached; max_deliver bounds how often. */
+const FEED_UNCLAIMED_NAK_MS = 5_000;
+
+/** Whether a feed delivery subject matches a feed subscription pattern
+ *  (`mesh.feed.{agent}.{topic}` exactly, or `mesh.feed.{agent}.*`). */
+function feedSubjectMatches(pattern: string, subject: string): boolean {
+  if (pattern === subject) return true;
+  const p = pattern.split(".");
+  const s = subject.split(".");
+  return p.length === 4 && s.length === 4 && p[3] === "*" && p[0] === s[0] && p[1] === s[1] && p[2] === s[2];
 }
 
 /** One task update as delivered to an `onTaskUpdate` handler: the fields of
@@ -364,6 +395,16 @@ export class AgentMesh {
   /** Durable event subscriptions (§18.6), stopped (never deleted) on
    *  drain/close/detach; see DurableEventSubscription.stop. */
   private durableEventSubs: DurableEventSubscription[] = [];
+  /** The one durable feed consumer's consume loop (§18.6 Feed Consumer) and
+   *  the handlers it dispatches to, keyed by feed pattern. Bindings are
+   *  serialized through `feedDurableChain` so two subscribeFeed calls never
+   *  race an update of the consumer's filters. */
+  private feedDurable: {
+    handlers: Map<string, EventHandler>;
+    messages: { stop(): void };
+    loop: Promise<void>;
+  } | null = null;
+  private feedDurableChain: Promise<unknown> = Promise.resolve();
   /** One update subscription per Task this agent initiated (§6.5): budget
    *  revisions and progress arrive on `mesh.task.<id>.update`. Torn down when
    *  the task goes terminal, and wholesale on detach. */
@@ -647,9 +688,25 @@ export class AgentMesh {
     }
   }
 
-  /** Build an envelope and sign it with this agent's key (§4.5, always-sign). */
+  /** Build an envelope and sign it with this agent's key (§4.5, always-sign).
+   *  Meta from `setOutgoingMeta` rides underneath the caller's own. */
   private newEnvelope(params: Parameters<typeof createEnvelope>[0]): Envelope {
-    return signEnvelope(createEnvelope(params), this.kp);
+    const stamped = this.outgoingMeta?.();
+    const p = stamped ? { ...params, meta: { ...stamped, ...(params.meta ?? {}) } } : params;
+    return signEnvelope(createEnvelope(p), this.kp);
+  }
+
+  private outgoingMeta: (() => Record<string, unknown> | undefined) | null = null;
+
+  /**
+   * Stamp meta on every envelope this agent signs from now on, asked afresh
+   * each time. For a key holder serving several places at once (SPEC §4.11
+   * form 1): the function reads which place the current call came through
+   * and returns `{ via: … }`, or undefined for none. The caller's own meta
+   * keys win over the stamped ones. Pass null to stop.
+   */
+  setOutgoingMeta(fn: (() => Record<string, unknown> | undefined) | null): void {
+    this.outgoingMeta = fn;
   }
 
   /**
@@ -1740,6 +1797,13 @@ export class AgentMesh {
         ...(typeof to === "string" ? { replacedBy: to } : {}),
       };
     }
+    // The kill switch (§9 registry status): a paused agent's manifest says
+    // so, and a receiver refuses what it sends until it is resumed.
+    const status = (respEnv.payload as { status?: unknown; status_since?: unknown } | undefined)?.status;
+    if (status === "paused") {
+      const since = (respEnv.payload as { status_since?: unknown }).status_since;
+      return { revoked: false, paused: true, ...(typeof since === "string" ? { since } : {}) };
+    }
     return { revoked: false };
   }
 
@@ -2590,8 +2654,28 @@ export class AgentMesh {
    * and not the other — with this subscription's subject as the §22.2 dedup
    * scope. Feed deliveries are AMBIENT: they reach the event handler and
    * nothing else — never the inbox, never mail, never a waiting count.
+   *
+   * With `opts.durable` it is the SPEC §18.6 Feed Consumer instead: the feed
+   * is added to this agent's one durable consumer on MESH_FEED
+   * (`mesh_feed_{agent_id}`), so a publish made while this agent was offline
+   * is delivered when it comes back, and one its handler failed on is
+   * redelivered. That path returns a Promise of a `DurableFeedSubscription`,
+   * because binding the consumer is a round trip. See subscribeFeedDurable.
    */
-  subscribeFeed(agentId: string, topic: string, handler: EventHandler): Subscription {
+  subscribeFeed(agentId: string, topic: string, handler: EventHandler): Subscription;
+  subscribeFeed(
+    agentId: string,
+    topic: string,
+    handler: EventHandler,
+    opts: { durable: string | true },
+  ): Promise<DurableFeedSubscription>;
+  subscribeFeed(
+    agentId: string,
+    topic: string,
+    handler: EventHandler,
+    opts?: { durable?: string | boolean },
+  ): Subscription | Promise<DurableFeedSubscription> {
+    if (opts?.durable) return this.subscribeFeedDurable(agentId, topic, handler);
     const pattern = Subjects.feedPattern(agentId, topic);
     const sub = this.conn.subscribe(pattern, (msg: Msg) => {
       try {
@@ -2603,6 +2687,176 @@ export class AgentMesh {
     });
     this.eventSubs.push(sub);
     return sub;
+  }
+
+  /**
+   * The durable half of subscribeFeed() (SPEC §18.6 Feed Consumer).
+   *
+   * ONE consumer per agent on MESH_FEED, named `mesh_feed_{agent_id}`, whose
+   * `filter_subjects` are every feed the agent follows durably. One per agent
+   * and not one per feed because a credential grants a consumer only by its
+   * whole name (a permission matches whole subject tokens), and the agent's
+   * own key is the one name known when its credential is minted; a consumer
+   * named per feed could only be granted as `*`, and then any agent could
+   * pull another agent's deliveries. Config, pinned by SPEC and by every
+   * SDK's tests: ack_policy Explicit, deliver_policy New, ack_wait 30s,
+   * max_deliver 5.
+   *
+   * Binding: info on the consumer; when it is missing, create it with this
+   * feed as its one filter; when it stands without this feed, update its
+   * filters to add it. Filters are never removed here: a feed this process no
+   * longer follows keeps arriving, and a delivery no handler claims is handed
+   * back after FEED_UNCLAIMED_NAK_MS (so a process that subscribes several
+   * feeds one after another does not lose one it has not reached yet), and
+   * max_deliver ends it.
+   *
+   * One consume loop per process, shared by every durable feed subscription,
+   * because a pull consumer splits its deliveries between whoever pulls. A
+   * delivery is dispatched through the §22 pipeline (buffered freshness
+   * window, per-pattern dedup) to every handler whose pattern matches its
+   * subject and acked after they all return; a handler that throws leaves it
+   * unacked for redelivery. Undecodable bytes are acked and dropped.
+   *
+   * A missing MESH_FEED stream or a refused JetStream call throws, loudly,
+   * rather than degrading to a live subscription: a caller who asked for
+   * durability must not silently get the weak thing. A credential minted
+   * before the feed-consumer grant existed is refused here; renewing it
+   * gives it the grant.
+   */
+  private subscribeFeedDurable(
+    agentId: string,
+    topic: string,
+    handler: EventHandler,
+  ): Promise<DurableFeedSubscription> {
+    const pattern = Subjects.feedPattern(agentId, topic); // validates both tokens
+    const run = this.feedDurableChain.then(() => this.bindFeedDurable(pattern, handler));
+    this.feedDurableChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async bindFeedDurable(pattern: string, handler: EventHandler): Promise<DurableFeedSubscription> {
+    const stream = Subjects.FEED_STREAM;
+    const durable = Subjects.feedConsumer(this.agentId);
+    try {
+      const raw = this.conn.raw;
+      const jsm = await raw.jetstreamManager();
+      let filters: string[] | null = null;
+      try {
+        const info = (await jsm.consumers.info(stream, durable)) as unknown as {
+          config?: { filter_subjects?: string[]; filter_subject?: string };
+        };
+        const c = info?.config ?? {};
+        filters = c.filter_subjects?.length ? [...c.filter_subjects] : c.filter_subject ? [c.filter_subject] : [];
+      } catch {
+        filters = null; // no consumer yet
+      }
+      if (filters === null) {
+        await jsm.consumers.add(stream, {
+          durable_name: durable,
+          ack_policy: AckPolicy.Explicit,
+          deliver_policy: DeliverPolicy.New,
+          ack_wait: 30_000_000_000, // 30s in ns
+          max_deliver: 5,
+          filter_subjects: [pattern],
+        });
+      } else if (!filters.includes(pattern)) {
+        await jsm.consumers.update(stream, durable, {
+          filter_subject: undefined,
+          filter_subjects: [...filters, pattern],
+        } as unknown as Parameters<typeof jsm.consumers.update>[2]);
+      }
+      if (!this.feedDurable) {
+        const consumer = await raw.jetstream().consumers.get(stream, durable);
+        const messages = (await consumer.consume()) as unknown as {
+          stop(): void;
+          [Symbol.asyncIterator](): AsyncIterator<JsLikeMsg>;
+        };
+        const handlers = new Map<string, EventHandler>();
+        const loop = this.feedDurableLoop(messages, handlers);
+        this.feedDurable = { handlers, messages, loop };
+      }
+    } catch (err) {
+      throw new MeshError(
+        ErrorCode.DEPENDENCY_FAILED,
+        `subscribeFeed("${pattern}", { durable }) could not bind this agent's feed consumer ` +
+          `${durable} on ${stream}. Durable feed subscriptions need JetStream and the ${stream} ` +
+          `stream on this mesh, and a credential that grants this agent its own feed consumer ` +
+          `(one minted before that grant existed is refused until it is renewed). Not degrading ` +
+          `to a live subscription: you asked for durability.`,
+        { cause: err instanceof Error ? err : undefined },
+      );
+    }
+    const state = this.feedDurable!;
+    state.handlers.set(pattern, handler);
+    return {
+      durable,
+      subject: pattern,
+      stop: async () => {
+        if (this.feedDurable !== state || state.handlers.get(pattern) !== handler) return;
+        state.handlers.delete(pattern);
+        if (state.handlers.size === 0) {
+          this.feedDurable = null;
+          try {
+            state.messages.stop();
+          } catch {
+            /* already stopped */
+          }
+          await state.loop;
+        }
+      },
+    };
+  }
+
+  private feedDurableLoop(
+    messages: { stop(): void; [Symbol.asyncIterator](): AsyncIterator<JsLikeMsg> },
+    handlers: Map<string, EventHandler>,
+  ): Promise<void> {
+    return (async () => {
+      for await (const m of messages) {
+        let env: Envelope | null = null;
+        try {
+          env = decode(m.data);
+        } catch {
+          env = null;
+        }
+        if (env === null) {
+          m.ack(); // undecodable buffered bytes: drop, don't loop
+          continue;
+        }
+        const subject = typeof m.subject === "string" ? m.subject : "";
+        const claimed = [...handlers].filter(([pattern]) => feedSubjectMatches(pattern, subject));
+        if (claimed.length === 0) {
+          // Nobody here follows this feed (yet): hand it back for later.
+          try {
+            m.nak?.(FEED_UNCLAIMED_NAK_MS);
+          } catch {
+            /* the connection went; redelivery follows ack_wait */
+          }
+          continue;
+        }
+        try {
+          for (const [pattern, h] of claimed) this.dispatchEvent(env, subject, h, true, pattern);
+          m.ack(); // after every handler returned: the ack is "durably handled"
+        } catch {
+          // Handler failure: no ack, so ack_wait redelivers (up to max_deliver).
+        }
+      }
+    })().catch(() => {
+      // The iterator ends when the connection closes or stop() is called.
+    });
+  }
+
+  /** Stop (never delete) the durable feed consumer's loop. */
+  private stopFeedDurable(): void {
+    const state = this.feedDurable;
+    this.feedDurable = null;
+    if (!state) return;
+    state.handlers.clear();
+    try {
+      state.messages.stop();
+    } catch {
+      /* already stopped */
+    }
   }
 
   /**
@@ -2973,6 +3227,7 @@ export class AgentMesh {
     return {
       agentId: this.agentId,
       keyPair: this.kp,
+      outgoingMeta: () => this.outgoingMeta?.(),
       publish: (subject, data) => this.conn.publish(subject, data),
       subscribe: (subject, onEnvelope) => {
         const sub = this.conn.subscribe(subject, (msg: Msg) => {
@@ -3874,6 +4129,7 @@ export class AgentMesh {
     this.storefront?.stop();
     this.stopOfflineDrain();
     this.stopDurableEventSubs();
+    this.stopFeedDurable();
     if (this.ownsConnection) {
       await this.conn.drain();
     } else {
@@ -3892,6 +4148,7 @@ export class AgentMesh {
     this.storefront?.stop();
     this.stopOfflineDrain();
     this.stopDurableEventSubs();
+    this.stopFeedDurable();
     if (this.ownsConnection) {
       await this.conn.close();
     } else {
@@ -3909,6 +4166,7 @@ export class AgentMesh {
     for (const sub of this.eventSubs) sub.unsubscribe();
     this.eventSubs = [];
     this.stopDurableEventSubs();
+    this.stopFeedDurable();
     for (const sub of this.taskUpdateSubs.values()) sub.unsubscribe();
     this.taskUpdateSubs.clear();
   }
@@ -4485,6 +4743,34 @@ export class AgentMesh {
     // answered as though the sender were who it says.
     if (this.revokedSenders) {
       const revoked = await this.revokedSenders.check(env.from);
+      // The kill switch (§5.3): a paused sender is refused too. Its node may
+      // still be able to publish, so the receiver refusing is what makes the
+      // pause hold. Unlike a revocation, a pause is lifted, and the memo says
+      // so again within a minute of the resume.
+      if (revoked?.paused) {
+        const viaReply = !buffered && typeof msg.subject === "string" && msg.subject.endsWith(".inbox.guarded");
+        const errEnv = this.newEnvelope({
+          type: "respond",
+          from: this.agentId,
+          to: env.from,
+          in_reply_to: env.id,
+          trace: childSpan(env.trace),
+          error: {
+            code: ErrorCode.UNAUTHORIZED,
+            message: "The agent that sent this is paused by its owner or by AgentMesh, so its messages are refused until it is resumed (§5.3).",
+            details: { reason: "agent_paused", ...(revoked.since ? { stopped_at: revoked.since } : {}) },
+            retryable: false,
+          },
+        });
+        this.sendRespond(msg, env, encode(errEnv), { transportReply: viaReply });
+        this.onSecurityWarning?.({
+          code: "stopped_sender",
+          message: "refused a request from an agent that is paused by the kill switch",
+          from: env.from,
+          subject: this.agentId,
+        });
+        return;
+      }
       if (revoked) {
         const viaReply = !buffered && typeof msg.subject === "string" && msg.subject.endsWith(".inbox.guarded");
         const errEnv = this.newEnvelope({

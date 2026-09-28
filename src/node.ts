@@ -1,4 +1,5 @@
-import { nkeys, jwtAuthenticator } from "nats.ws";
+import { nkeys } from "./internal/nkeys.js";
+import { jwtAuthenticator } from "nats.ws";
 import type { Availability, NodeDeclaredProfile } from "./types/manifest.js";
 import type { ConnectOptions, SecurityWarning } from "./types/options.js";
 import { ConnectionManager } from "./internal/connection.js";

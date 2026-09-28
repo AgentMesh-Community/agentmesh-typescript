@@ -125,6 +125,15 @@ export const Subjects = {
    *  to `mesh.feed.>`. */
   FEED_STREAM: "MESH_FEED",
 
+  /** An agent's durable feed consumer on MESH_FEED (§18.6 Feed Consumer):
+   *  ONE per agent, `mesh_feed_{agent_id}`, whose `filter_subjects` are the
+   *  feeds it follows durably. Named for the agent, not the feed, because a
+   *  credential can grant a consumer only by its whole name, and this is the
+   *  one name known when the credential is minted. Cross-SDK contract. */
+  feedConsumer(agentId: string): string {
+    return `mesh_feed_${token("agent id", agentId)}`;
+  },
+
   /** Node-scoped heartbeat (§9.6). */
   heartbeat(nodeId: string): string {
     return `mesh.heartbeat.${token("node id", nodeId)}`;

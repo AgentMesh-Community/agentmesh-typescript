@@ -157,6 +157,19 @@ describe("RevokedSenders memo", () => {
     expect(lookup).toHaveBeenCalledTimes(2);
   });
 
+  it("refuses a paused sender, and lets it back in within a minute of the resume (the kill switch)", async () => {
+    let t = 0;
+    let paused = true;
+    const lookup = vi.fn(async () => (paused ? { revoked: false as const, paused: true, since: "2026-09-27T10:00:00.000Z" } : { revoked: false as const }));
+    const r = new RevokedSenders(lookup, () => t);
+    expect(await r.check("UP")).toEqual({ paused: true, since: "2026-09-27T10:00:00.000Z" });
+    paused = false;
+    // Still remembered as paused inside the memo, then asked again.
+    expect((await r.check("UP"))?.paused).toBe(true);
+    t += RevokedSenders.OK_MS + 1;
+    expect(await r.check("UP")).toBeNull();
+  });
+
   it("treats a lookup that never answers as unknown, after its own timeout", async () => {
     vi.useFakeTimers();
     try {

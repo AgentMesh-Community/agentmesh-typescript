@@ -16,7 +16,7 @@
  * are skew-free; cross-machine intervals (transit, return) inherit host clock
  * skew — when that matters, use `total - (poll_lag + think)` for their sum.
  */
-import { nkeys } from "nats.ws";
+import { nkeys } from "./internal/nkeys.js";
 import { AgentMesh } from "./mesh.js";
 import { Room, RoomsServiceSubjects } from "./rooms.js";
 import { canonicalJSON, fromB64Url } from "./internal/identity.js";

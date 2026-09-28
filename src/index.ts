@@ -21,6 +21,10 @@ export {
   // feeds by §18.3).
   type FeedKind,
   type FeedWatch,
+  // Durable feed subscriptions (SPEC §18.6 Feed Consumer): subscribeFeed()
+  // with { durable } adds the feed to the agent's one consumer on MESH_FEED,
+  // so what was published while it was offline arrives when it returns.
+  type DurableFeedSubscription,
 } from "./mesh.js";
 
 // Sender pre-flight (§6.4b): the sender-side mirror of the §22 receiver
@@ -745,6 +749,41 @@ export {
 } from "./internal/identity.js";
 export { createEnvelope } from "./internal/envelope-builder.js";
 
+// One agent, many places (§4.11): the delegation a place acts under, the
+// approval a committing act needs, a place's signed request to the key
+// holder, and the checks a receiver of a direct delegated envelope runs.
+export {
+  DELEGATION_SIG_PREFIX,
+  APPROVAL_SIG_PREFIX,
+  PLACE_REQUEST_SIG_PREFIX,
+  DELEGATION_SCOPES,
+  COMMITTING_ACTS,
+  READ_ACTS,
+  isCommittingAct,
+  scopeCovers,
+  signDelegation,
+  verifyDelegation,
+  signApproval,
+  verifyApproval,
+  signPlaceRequest,
+  verifyPlaceRequest,
+  actDigest,
+  verifyDelegatedEnvelope,
+  signDelegatedEnvelope,
+  viaOf,
+} from "./delegation.js";
+export type {
+  Delegation,
+  DelegationPlace,
+  DelegationScope,
+  DelegationRefusal,
+  Approval,
+  ApprovalAct,
+  PlaceKind,
+  PlaceRequest,
+  Via,
+} from "./delegation.js";
+
 // Tracing (§13.1): W3C Trace Context helpers for bridging to HTTP-instrumented
 // systems, and the ambient store used for automatic propagation.
 export { newTraceContext, childSpan, toTraceparent, fromTraceparent } from "./internal/trace.js";
@@ -796,6 +835,9 @@ export {
   buildCredentialRequest,
   renewNodeCredential,
   CredentialRenewer,
+  // The kill switch: a refusal carries the mesh's code (agent_paused,
+  // agent_terminated) so a host waits instead of retrying.
+  CredentialRefusedError,
   // The per-request deadline. `sdk-rust`'s built-in transport uses the same
   // number; retry is the renewal loop's job in both, never the call's.
   CREDENTIAL_REQUEST_TIMEOUT_MS,
