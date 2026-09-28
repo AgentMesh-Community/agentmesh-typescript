@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.54.1 (2026-09-28)
+
+- `offeringsFromDescriptor` keeps an offering's `how.control` as `control`,
+  and `isScripted` says whether the work is a fixed program: the only kind a
+  host refuses for words (Common Agent 4.7.1). A model-controlled offering
+  reads a request in words itself.
+- The standard reply says "does not carry them" when two inputs are missing,
+  and a manifest's integer or number member reads as a number.
+
 ## 0.54.0 (2026-09-28)
 
 - Input an agent cannot use (SPEC 12.2 `INPUT_NOT_UNDERSTOOD`, Common Agent

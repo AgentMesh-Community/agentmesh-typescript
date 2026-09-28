@@ -9,6 +9,7 @@ import {
   fitCheck,
   inputNotUnderstood,
   isHelpQuestion,
+  isScripted,
   isRunnerLine,
   isYes,
   needsConfirmation,
@@ -126,6 +127,13 @@ describe("the standard reply", () => {
     expect(t).toContain("Write facts (write-facts)");
     expect(t).toContain("It takes: site-read (a JSON file, required)");
     expect(t).toContain("no model involved");
+  });
+
+  it("a descriptor offering carries how its work is controlled; two missing inputs read as them", () => {
+    const o = offeringsFromDescriptor({ offerings: [{ id: "a", inputs: [], how: { control: "script" } }, { id: "b", inputs: [] }] });
+    expect(o.map((x) => [x.id, isScripted(x)])).toEqual([["a", true], ["b", false]]);
+    const two = inputNotUnderstood({ agent: "fact-checker", offerings: factWriter, offering: { id: "c", name: "Check facts", inputs: [{ name: "facts", kind: "application/json", required: true }, { name: "site-read", kind: "application/json", required: true }] }, reason: "missing_input", missing: ["facts", "site-read"] });
+    expect(two.text).toContain("does not carry them");
   });
 
   it("manifest offerings read their JSON schema as inputs", () => {

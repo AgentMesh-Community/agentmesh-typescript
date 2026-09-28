@@ -359,6 +359,7 @@ export {
   offeringsFromDescriptor,
   offeringsFromManifest,
   declaresStructuredInputs,
+  isScripted,
   isHelpQuestion,
   isRunnerLine,
   isYes,

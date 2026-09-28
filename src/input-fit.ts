@@ -51,6 +51,17 @@ export interface DeclaredOffering {
   does?: string;
   inputs?: DeclaredInput[];
   examples?: string[];
+  /** How the work is controlled (Common Agent 12.3 `how.control`), when
+   *  declared: "script" is a fixed program, which cannot read a request in
+   *  words; anything else (a model) can, so its messages are its own to read. */
+  control?: string;
+}
+
+/** Whether an offering's work is a fixed program: the only kind the fit check
+ *  refuses for. An offering a model controls reads words itself, and one that
+ *  does not say is given the benefit of the doubt. */
+export function isScripted(o: DeclaredOffering): boolean {
+  return o.control === "script";
 }
 
 export interface FileRef {
@@ -102,12 +113,14 @@ export function offeringsFromDescriptor(doc: unknown): DeclaredOffering[] {
     const id = str(r.id).trim();
     if (!id) continue;
     const examples = Array.isArray(r.examples) ? r.examples.filter((e): e is string => typeof e === "string" && !!e.trim()) : [];
+    const how = r.how && typeof r.how === "object" ? (r.how as Record<string, unknown>) : null;
     out.push({
       id,
       ...(str(r.name) ? { name: str(r.name) } : {}),
       ...(str(r.does) ? { does: str(r.does) } : {}),
       inputs: readInputs(r.inputs),
       ...(examples.length ? { examples } : {}),
+      ...(str(how?.control) ? { control: str(how?.control) } : {}),
     });
   }
   return out;
@@ -129,7 +142,7 @@ export function offeringsFromManifest(manifest: unknown): DeclaredOffering[] {
     const required = new Set(Array.isArray(schema?.required) ? (schema!.required as unknown[]).filter((x): x is string => typeof x === "string") : []);
     const inputs: DeclaredInput[] = Object.entries(props).map(([name, p]) => {
       const t = str(p?.type);
-      const kind = t === "object" || t === "array" ? "application/json" : str(p?.format) === "uri" ? "url" : "text";
+      const kind = t === "object" || t === "array" ? "application/json" : t === "integer" || t === "number" ? "number" : str(p?.format) === "uri" ? "url" : "text";
       return { name, kind, ...(required.has(name) ? { required: true } : {}) };
     });
     const examples = Array.isArray(r.examples) ? r.examples.filter((e): e is string => typeof e === "string" && !!e.trim()) : [];
@@ -404,7 +417,8 @@ export function inputNotUnderstood(args: {
       const i = (o.inputs ?? []).find((x) => x.name === m);
       return i ? `${m} (${kindWords(i.kind)})` : m;
     }).join(" and ");
-    why = `it needs ${needs || "an input it declares"}, and ${args.hasFiles ? "the attached files are not that" : "the message does not carry it"}`;
+    const many = missing.length > 1;
+    why = `it needs ${needs || "an input it declares"}, and ${args.hasFiles ? `the attached files are not ${many ? "those" : "that"}` : `the message does not carry ${many ? "them" : "it"}`}`;
   }
   const lead = `${agent} could not use this message${readAs ? `, which reads as ${readAs}` : ""}: ${why}.`;
   const accepts = o
