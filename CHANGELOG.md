@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.53.1 (2026-09-28)
+
+- The heartbeat timers (an agent's and a node's) never throw. A connection
+  that closed under a running timer, as the kill switch's cut does, made the
+  next beat throw from the timer and end the host process. A beat on a closed
+  connection is now dropped and the timer stops.
+
 ## 0.53.0 (2026-09-28)
 
 - The kill switch (SPEC 4.12, 5.3): a receiver refuses a request from a

@@ -3416,7 +3416,18 @@ export class AgentMesh {
   startHeartbeat(intervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS): void {
     this.stopHeartbeat();
     this.sendHeartbeat();
-    this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), intervalMs);
+    // A timer must never throw: an exception from it ends the host process.
+    // The connection can close under a running timer (the kill switch cuts a
+    // connection on a lift so its node re-mints, and a hosted agent lives in
+    // the platform's own process), and a beat on a closed connection is one
+    // nobody can receive, so it is dropped and the timer stops.
+    this.heartbeatTimer = setInterval(() => {
+      try {
+        this.sendHeartbeat();
+      } catch (err) {
+        if ((err as { code?: string })?.code === "CONNECTION_CLOSED") this.stopHeartbeat();
+      }
+    }, intervalMs);
   }
 
   /** Stop sending periodic heartbeats. */

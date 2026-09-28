@@ -379,7 +379,15 @@ export class MeshNode {
   startHeartbeat(intervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS): void {
     this.stopHeartbeat();
     this.sendHeartbeat();
-    this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), intervalMs);
+    // A timer must never throw (it would end the host process); a beat on a
+    // connection that closed under it is dropped and the timer stops.
+    this.heartbeatTimer = setInterval(() => {
+      try {
+        this.sendHeartbeat();
+      } catch (err) {
+        if ((err as { code?: string })?.code === "CONNECTION_CLOSED") this.stopHeartbeat();
+      }
+    }, intervalMs);
   }
 
   stopHeartbeat(): void {

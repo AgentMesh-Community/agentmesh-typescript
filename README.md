@@ -14,7 +14,7 @@ all three to the same answers.
 The package is not on npm yet. Until it is, install the release tarball:
 
 ```bash
-npm install https://storage.googleapis.com/agentmesh-releases/agentmesh-0.53.0.tgz
+npm install https://storage.googleapis.com/agentmesh-releases/agentmesh-0.53.1.tgz
 ```
 
 or build it from this repository:

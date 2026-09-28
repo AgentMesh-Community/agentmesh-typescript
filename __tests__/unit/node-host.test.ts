@@ -241,3 +241,42 @@ describe("MeshNode — one connection, N hosted agents (§4.1)", () => {
     expect(() => node.addAgent()).toThrow(/closed/);
   });
 });
+
+describe("heartbeat timers on a closed connection", () => {
+  // 2026-09-28: the kill switch's lift cuts a hosted agent's connection so it
+  // re-mints; the agent's heartbeat timer then published on the closed
+  // connection, threw from the timer, and ended the platform's process.
+  const closedError = () => Object.assign(new Error("CONNECTION_CLOSED"), { code: "CONNECTION_CLOSED" });
+
+  it("the node's timer drops a beat on a closed connection and stops, without throwing", () => {
+    vi.useFakeTimers();
+    try {
+      const { conn, node } = makeNode();
+      node.startHeartbeat(1000);
+      conn.publish.mockImplementation(() => { throw closedError(); });
+      expect(() => vi.advanceTimersByTime(1000)).not.toThrow();
+      const calls = conn.publish.mock.calls.length;
+      vi.advanceTimersByTime(5000);
+      expect(conn.publish.mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an agent's timer does the same", async () => {
+    const { conn, node } = makeNode();
+    const agent = node.addAgent();
+    await agent.register({ name: "Beating Agent" });
+    vi.useFakeTimers();
+    try {
+      agent.startHeartbeat(1000);
+      conn.publish.mockImplementation(() => { throw closedError(); });
+      expect(() => vi.advanceTimersByTime(1000)).not.toThrow();
+      const calls = conn.publish.mock.calls.length;
+      vi.advanceTimersByTime(5000);
+      expect(conn.publish.mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
