@@ -835,7 +835,7 @@ export { newTraceContext, childSpan, toTraceparent, fromTraceparent } from "./in
 // the SDK emits, rather than reverse-engineering them from a payload.
 export { traceSubject, spanData, spanPayload, outcomeOf } from "./internal/spans.js";
 export type { SpanData, SpanInput, SpanKind, SpanOutcome } from "./internal/spans.js";
-export { otlpTraces } from "./internal/otlp.js";
+export { otlpTraces, agentNames } from "./internal/otlp.js";
 export { otlpTracesProto } from "./internal/otlp-proto.js";
 export type { OtlpOptions } from "./internal/otlp.js";
 export { runWithTrace, currentTrace } from "./internal/trace-ambient.js";

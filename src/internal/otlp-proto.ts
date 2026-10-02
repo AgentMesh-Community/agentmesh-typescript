@@ -94,7 +94,7 @@ const OTLP_KIND: Record<string, number> = { producer: 4, consumer: 5 };
 const OTLP_STATUS: Record<string, number> = { ok: 1, error: 2, refused: 2, timeout: 2, canceled: 2 };
 
 /** trace.v1.Span */
-function span(s: SpanData): number[] {
+function span(s: SpanData, names?: Record<string, string>): number[] {
   const attrs: [string, string][] = [
     ["openinference.span.kind", "AGENT"],
     ["agentmesh.primitive", s.operation],
@@ -102,7 +102,7 @@ function span(s: SpanData): number[] {
   ];
   if (s.offering) attrs.push(["agentmesh.offering", s.offering]);
   if (s.error_code) attrs.push(["agentmesh.error_code", s.error_code]);
-  if (s.tags?.peer) attrs.push(["agentmesh.peer", s.tags.peer]);
+  if (s.tags?.peer) attrs.push(["agentmesh.peer", names?.[s.tags.peer] ?? s.tags.peer]);
   if (s.tags?.task_id) attrs.push(["agentmesh.task_id", s.tags.task_id]);
   if (s.tags?.context_id) attrs.push(["agentmesh.context_id", s.tags.context_id]);
 
@@ -142,7 +142,7 @@ export function otlpTracesProto(spans: SpanData[], opts: OtlpOptions = {}): Uint
   for (const [agentId, group] of byAgent) {
     // resource.v1.Resource { attributes = 1 }
     const resourceAttrs: [string, string][] = [
-      ["service.name", agentId],
+      ["service.name", opts.names?.[agentId] ?? agentId],
       ["agentmesh.agent", agentId],
       ...Object.entries(opts.resourceAttributes ?? {}),
     ];
@@ -155,7 +155,7 @@ export function otlpTracesProto(spans: SpanData[], opts: OtlpOptions = {}): Uint
       ...stringField(2, opts.scopeVersion ?? ""),
     ];
     const scopeSpans: number[] = [...bytesField(1, scope)];
-    for (const s of group) scopeSpans.push(...bytesField(2, span(s)));
+    for (const s of group) scopeSpans.push(...bytesField(2, span(s, opts.names)));
 
     // trace.v1.ResourceSpans { resource = 1, scope_spans = 2 }
     const resourceSpans = [...bytesField(1, resource), ...bytesField(2, scopeSpans)];

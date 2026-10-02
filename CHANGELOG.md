@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `OtlpOptions.names` puts names in place of agent keys on export: a named
+  agent's `service.name` and a named counterparty's `agentmesh.peer` carry the
+  name, and `agentmesh.agent` keeps the key. Off unless asked, in both
+  encoders. `agentNames(spans, lookup)` resolves every agent a batch mentions
+  through a `NameLookup` (normally `registrarNameLookup()`) and keeps only
+  verified handles, so a service map reads `planner.ann@example.com` rather
+  than a 56-character key.
+
 ## 0.54.1 (2026-09-28)
 
 - `offeringsFromDescriptor` keeps an offering's `how.control` as `control`,
