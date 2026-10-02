@@ -5227,22 +5227,27 @@ export class AgentMesh {
       return;
     }
 
+    // The consumer half of the hop (§13.1.1): a span of its own, parented under
+    // the sender's producer span. The inbound envelope's trace IS that producer
+    // span (the sender closes its producer span on `envelope.trace`), so
+    // carrying it unchanged would give both halves one span_id and make the
+    // consumer a sibling of the producer rather than its child.
+    const consumerTrace = childSpan(env.trace);
+
     const ctx: RequestContext = {
       envelope: env,
       taskId: dispatchTaskId,
-      traceContext: env.trace,
+      traceContext: consumerTrace,
       budget: env.budget,
       reportUsage: (usage) => void this.reportUsage(dispatchTaskId, usage, env.context_id),
       reportMeter: (meter, quantity) => this.reportMeterUsage(dispatchTaskId, meter, quantity),
     };
 
-    // The consumer half of the hop (§13.1.1), parented under the sender's span
-    // by virtue of carrying the inbound envelope's own trace. Timed around the
-    // handler, which is the part this agent is answerable for.
+    // Timed around the handler, which is the part this agent is answerable for.
     const spanStart = Date.now();
     const closeSpan = (outcome: SpanOutcome, errorCode?: string) =>
       this.publishSpan({
-        trace: env.trace,
+        trace: consumerTrace,
         kind: "consumer",
         agentId: this.agentId,
         operation: "request",
@@ -5260,8 +5265,10 @@ export class AgentMesh {
     // owes its terminal statement to the task update channel instead.
     let deferred = false;
     try {
-      // §13.1: the inbound trace is ambient while the handler runs, so any
-      // request/emit the handler makes joins the same trace automatically.
+      // §13.1: the consumer span is ambient while the handler runs, so any
+      // request/emit the handler makes joins the same trace automatically, as
+      // a child of this agent's own span ("set parent_span_id to its own
+      // span_id").
       // §10.8: so is the dispatch (task id + offering), so any sub-request the
       // handler makes is recorded as a delegation for cancel propagation.
       // §7.0 deferral (HandlerOptions.deferAfterMs): a LIVE dispatch with a
@@ -5274,7 +5281,7 @@ export class AgentMesh {
       // (§6.4). Same gate as the Rust SDK.
       const deferAfterMs = this.router.optionsFor(reqPayload.offering)?.deferAfterMs;
       const run = runWithDispatch({ taskId: ctx.taskId, offering: reqPayload.offering }, () =>
-        runWithTrace(env.trace, () => handler(input, ctx)),
+        runWithTrace(consumerTrace, () => handler(input, ctx)),
       );
       let result: unknown;
       if (deferAfterMs !== undefined && !buffered) {

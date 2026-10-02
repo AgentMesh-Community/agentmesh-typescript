@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- The consumer span of a request (SPEC 13.1.1) is its own span, parented
+  under the sender's producer span. It carried the inbound envelope's trace
+  unchanged, which IS the producer span, so both halves of a hop shared one
+  `span_id` and the consumer was the producer's sibling. Calls a handler
+  makes now hang off the consumer span (`ctx.traceContext` and the ambient
+  trace), so a collector deriving a call graph from parentage no longer
+  double-counts a hop or draws an edge from a caller to its callee's callees.
+
 ## 0.54.1 (2026-09-28)
 
 - `offeringsFromDescriptor` keeps an offering's `how.control` as `control`,
