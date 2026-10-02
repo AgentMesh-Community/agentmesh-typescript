@@ -17,6 +17,7 @@
  * W3C Trace Context. Nothing here translates an identifier.
  */
 import type { SpanData } from "./spans.js";
+import type { NameLookup } from "../naming-gate.js";
 
 /** OTLP span kinds from the OpenTelemetry proto. */
 const OTLP_KIND: Record<string, number> = { producer: 4, consumer: 5 };
@@ -36,6 +37,41 @@ export interface OtlpOptions {
    * A vendor key baked into the SDK is a vendor key every other user carries.
    */
   resourceAttributes?: Record<string, string>;
+  /**
+   * Names to show for agent keys, keyed by the key: usually the verified
+   * handles `agentNames` resolves. A named agent's `service.name` and a named
+   * counterparty's `agentmesh.peer` carry the name instead of the key (§13.1.1
+   * allows either for the peer); `agentmesh.agent` always keeps the key, so
+   * nothing that identifies an agent is lost.
+   *
+   * Opt-in because a backend lists services by `service.name`, and a
+   * 56-character key is a name nobody can pick out of a service map, while a
+   * handle carries its owner's email into tooling the counterparty did not
+   * choose. Which of those matters more is the operator's call, not the SDK's.
+   */
+  names?: Record<string, string>;
+}
+
+/**
+ * The verified names of every agent a batch of spans mentions, emitter and
+ * counterparty alike, for `OtlpOptions.names`. Asks `lookup` (normally
+ * `registrarNameLookup()`) once per distinct key; a key that is unnamed or
+ * cannot be checked is left out, so it is exported as its key.
+ */
+export async function agentNames(spans: SpanData[], lookup: NameLookup): Promise<Record<string, string>> {
+  const keys = new Set<string>();
+  for (const s of spans) {
+    if (s.agent_id) keys.add(s.agent_id);
+    if (s.tags?.peer) keys.add(s.tags.peer);
+  }
+  const names: Record<string, string> = {};
+  await Promise.all(
+    [...keys].map(async (key) => {
+      const check = await lookup(key);
+      if (check.status === "named" && check.handle) names[key] = check.handle;
+    }),
+  );
+  return names;
 }
 
 function attr(key: string, value: string) {
@@ -67,7 +103,7 @@ export function otlpTraces(spans: SpanData[], opts: OtlpOptions = {}): unknown {
     resourceSpans: [...byAgent].map(([agentId, group]) => ({
       resource: {
         attributes: [
-          attr("service.name", agentId),
+          attr("service.name", opts.names?.[agentId] ?? agentId),
           attr("agentmesh.agent", agentId),
           ...Object.entries(opts.resourceAttributes ?? {}).map(([k, v]) => attr(k, v)),
         ],
@@ -90,7 +126,7 @@ export function otlpTraces(spans: SpanData[], opts: OtlpOptions = {}): unknown {
             ];
             if (s.offering) attributes.push(attr("agentmesh.offering", s.offering));
             if (s.error_code) attributes.push(attr("agentmesh.error_code", s.error_code));
-            if (s.tags?.peer) attributes.push(attr("agentmesh.peer", s.tags.peer));
+            if (s.tags?.peer) attributes.push(attr("agentmesh.peer", opts.names?.[s.tags.peer] ?? s.tags.peer));
             if (s.tags?.task_id) attributes.push(attr("agentmesh.task_id", s.tags.task_id));
             if (s.tags?.context_id) attributes.push(attr("agentmesh.context_id", s.tags.context_id));
 
